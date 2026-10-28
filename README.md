@@ -73,9 +73,9 @@ agent 都能驱动它。
 `$SDGEN_CONFIG` → `./sdgen.config.json`（当前工作目录）→ `<skill>/config.json`。
 
 ```powershell
-Copy-Item .dsh\skills\stable-diffusion-cpp\config.example.json sdgen.config.json
+Copy-Item <skill>\config.example.json sdgen.config.json
 # 填入 work_dir / qwen_dir / wan_dir（rocm_path 可选）
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py info
+python <skill>\scripts\sdgen.py info
 ```
 
 `info` 会把缺失项标成 `UNSET`，`gen` / `vid` 在缺项时直接拒绝执行并列出缺哪些键。
@@ -93,15 +93,15 @@ python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py info
 | `out_dir` | `SDGEN_OUT` | 默认 `sdgen-output` |
 | `ffmpeg` | `SDGEN_FFMPEG` | 缺省时依次找 `PATH`、`scripts/vendor` |
 
-另有三个纯环境变量：`SDGEN_CONFIG`（指定配置文件）、`SDGEN_SESSION`（历史分桶，默认取 `$DSH_SESSION_ID`）、
-`SDGEN_FFMPEG`。
+另有三个纯环境变量：`SDGEN_CONFIG`（指定配置文件）、`SDGEN_SESSION`（固定历史分桶，优先于 agent
+自带的会话变量）、`SDGEN_FFMPEG`。
 
 ## 快速开始
 
 配置好之后，在项目工作目录下执行（`$S` 按技能实际安装位置调整）：
 
 ```powershell
-$S = ".dsh\skills\stable-diffusion-cpp\scripts\sdgen.py"
+$S = "<skill>/scripts/sdgen.py"      # <skill> = 技能所在目录
 
 # 文生图（1024x1024、16 步）
 python $S gen "a red apple on a wooden table, window light"
@@ -133,7 +133,7 @@ python $S check sdgen-output\img\sd-20261028-121821.png
 400 invalid_request_error: Failed to load image or audio file
 ```
 
-图片超过 **4 MB** 或任一边超过 **2048 px** 时，DSH 会先重编码成 WebP 再发送，网关会拒绝；
+多数 harness（例如 DeepSeek Harness：超过 **4 MB** 或任一边超过 **2048 px** 就会先重编码成 WebP）与部分网关会直接拒绝图片 tool result；
 此外部分网关本来就拒绝图片 tool result。正确做法：**只报路径**，用 `check` 获取事实信息
 （尺寸、帧数、seed、步数、prompt、`attach_ok`）。`check` 会显式打印
 `do NOT read_image this file - report the path instead`。
@@ -162,7 +162,7 @@ sd.cpp 本身只能写 `.webm` / `.avi` / 动画 `.webp`。技能的做法：
 
 ### 5. 每个对话独立的改图链条
 
-历史清单按 DSH 会话隔离：`sdgen-output/.sessions/<session-id>.json`。`latest` 与 `@N` 只在当前会话内
+历史清单按 agent 会话隔离：`sdgen-output/.sessions/<session-key>.json`。`latest` 与 `@N` 只在当前会话内
 解析，多个对话并排跑不会互相干扰；每条记录带 `parents`，改图链条可回溯。跨会话接力用
 `--session <id>`，或 `use <file>` 注册外部图片。
 
@@ -199,7 +199,7 @@ params-backend disk**。同一 prompt + seed + 尺寸 + 步数下，本 CLI 与�
 | 变量 | 默认 |
 |---|---|
 | `SDGEN_CONFIG` | 未设置——显式指定配置文件 |
-| `SDGEN_SESSION` | `$DSH_SESSION_ID`（按会话隔离历史） |
+| `SDGEN_SESSION` | 未设置——不设时按 agent 会话变量 / 工作目录派生 |
 | `SDGEN_FFMPEG` | 未设置——依次找 `PATH`、`scripts/vendor` |
 
 ## 实测耗时（AMD ROCm gfx1100 / 24 GB）
