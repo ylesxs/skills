@@ -1,0 +1,19 @@
+{
+  "_readme": "Copy this file to sdgen.config.json in your working directory (or to <skill>/config.json) and fill in your own paths. Environment variables override every value here. Relative paths resolve against the current working directory.",
+  "work_dir": "",
+  "sd_cli": "sd-cli.exe",
+  "rocm_path": "",
+  "qwen_dir": "",
+  "qwen_model": "",
+  "qwen_vae": "",
+  "qwen_llm": "",
+  "qwen_vision": "",
+  "lora_dir": "",
+  "wan_dir": "",
+  "wan_model": "",
+  "wan_t5xxl": "",
+  "wan_tae": "",
+  "wan_vae": "",
+  "out_dir": "sdgen-output",
+  "ffmpeg": ""
+}

@@ -30,9 +30,10 @@ Copy-Item -Recurse skills\stable-diffusion-cpp <project>\.dsh\skills\
 
 ## 依赖
 
-1. **stable-diffusion.cpp**：`sd-cli.exe`（本仓库只调用，不分发）。默认路径
-   `D:\Ai\serves\lib\stable-diffusion\`，可用 `WORK_DIR` / `SD_CLI` 覆盖。
-2. **图片模型栈**（默认 `D:\Ai\serves\model\qwen\image\2.1\`）：
+技能**不含任何本机路径**。路径来自配置文件，其次环境变量（详见下文「配置」）：
+
+1. **stable-diffusion.cpp**：`sd-cli.exe`（本仓库只调用，不分发），放在 `work_dir` 指向的目录。
+2. **图片模型栈**（`qwen_dir`，默认取其中的固定文件名）：
 
    | 文件 | 作用 | 大小 |
    |---|---|---|
@@ -40,9 +41,9 @@ Copy-Item -Recurse skills\stable-diffusion-cpp <project>\.dsh\skills\
    | `qwen3vl_8b_int8_convrot.safetensors` | 文本编码器 | 9.4 GB |
    | `mmproj-qwen3vl_8b_heretic-f16.gguf` | 视觉塔 | 1.2 GB |
    | `qwen_image_2.1_vae_bf16.safetensors` | VAE | 0.7 GB |
-   | `lora/*.safetensors` | 可选 LoRA | — |
+   | `lora/*.safetensors` | 可选 LoRA（`lora_dir`，默认 `<qwen_dir>/lora`） | — |
 
-3. **视频模型栈**（默认 `D:\Ai\serves\model\wan\2.2\`）：`Wan2.2-TI2V-5B-Q8_0.gguf`（5.0 GB）、
+3. **视频模型栈**（`wan_dir`）：`Wan2.2-TI2V-5B-Q8_0.gguf`（5.0 GB）、
    `umt5-xxl-encoder-Q8_0.gguf`（5.6 GB）、`taew2_2.pth`（22 MB）、`Wan2.2_VAE.safetensors`（1.4 GB）。
 4. **ffmpeg**：mp4 输出与扩图的 canvas/mask 需要。`scripts/vendor/` 里的 87 MB 二进制不入库，克隆后执行一次：
 
@@ -50,11 +51,40 @@ Copy-Item -Recurse skills\stable-diffusion-cpp <project>\.dsh\skills\
    python scripts\fetch_vendor.py
    ```
 
-   也可直接 `SDGEN_FFMPEG=<path to ffmpeg.exe>` 或让 `ffmpeg` 出现在 `PATH` 中。
+   也可直接 `SDGEN_FFMPEG=<path to ffmpeg.exe>`，或让 `ffmpeg` 出现在 `PATH` 中。
+
+## 配置
+
+优先级：环境变量 > 配置文件 > 内置文件名（模型文件名固定，目录不内置）。配置文件按顺序查找：
+`$SDGEN_CONFIG` → `./sdgen.config.json`（当前工作目录）→ `<skill>/config.json`。
+
+```powershell
+Copy-Item .dsh\skills\stable-diffusion-cpp\config.example.json sdgen.config.json
+# 填入 work_dir / qwen_dir / wan_dir（rocm_path 可选）
+python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py info
+```
+
+`info` 会把缺失项标成 `UNSET`，`gen` / `vid` 在缺项时直接拒绝执行并列出缺哪些键。
+
+| 配置键 | 对应环境变量 | 含义 |
+|---|---|---|
+| `work_dir` | `WORK_DIR` | 存放 `sd-cli.exe` 的目录 |
+| `sd_cli` | `SD_CLI` | 可执行文件名或绝对路径（默认 `sd-cli.exe`） |
+| `rocm_path` | `ROCM_PATH` | 可选，存在时才加入 `PATH` |
+| `qwen_dir` | `QWEN_DIR` | Qwen-Image 模型目录 |
+| `qwen_model` `qwen_vae` `qwen_llm` `qwen_vision` | `QWEN_MODEL` `QWEN_VAE` `QWEN_LLM` `QWEN_VISION` | 单独覆盖某个文件 |
+| `lora_dir` | `LORA_DIR` | 默认 `<qwen_dir>/lora` |
+| `wan_dir` | `WAN_DIR` | Wan2.2 模型目录 |
+| `wan_model` `wan_t5xxl` `wan_tae` `wan_vae` | `MODEL_PATH` `T5XXL_PATH` `TAE_PATH` `VAE_PATH` | 单独覆盖某个文件 |
+| `out_dir` | `SDGEN_OUT` | 默认 `sdgen-output` |
+| `ffmpeg` | `SDGEN_FFMPEG` | 缺省时依次找 `PATH`、`scripts/vendor` |
+
+另有三个纯环境变量：`SDGEN_CONFIG`（指定配置文件）、`SDGEN_SESSION`（历史分桶，默认取 `$DSH_SESSION_ID`）、
+`SDGEN_FFMPEG`。
 
 ## 快速开始
 
-在项目工作目录下执行（路径按技能实际安装位置调整）：
+配置好之后，在项目工作目录下执行（`$S` 按技能实际安装位置调整）：
 
 ```powershell
 $S = ".dsh\skills\stable-diffusion-cpp\scripts\sdgen.py"
@@ -150,14 +180,13 @@ params-backend disk**。同一 prompt + seed + 尺寸 + 步数下，本 CLI 与�
 
 ## 环境变量
 
+配置键与变量的完整对应表见上文「配置」。没有配置文件对应项的只有三个：
+
 | 变量 | 默认 |
 |---|---|
-| `WORK_DIR` / `SD_CLI` | `D:\Ai\serves\lib\stable-diffusion` / `sd-cli.exe` |
-| `QWEN_DIR`、`QWEN_MODEL`、`QWEN_VAE`、`QWEN_LLM`、`QWEN_VISION`、`LORA_DIR` | `D:\Ai\serves\model\qwen\image\2.1` |
-| `WAN_DIR`、`MODEL_PATH`、`T5XXL_PATH`、`TAE_PATH`、`VAE_PATH` | `D:\Ai\serves\model\wan\2.2` |
-| `SDGEN_OUT` | `sdgen-output`（相对当前工作目录） |
-| `SDGEN_SESSION` | `$DSH_SESSION_ID` |
-| `SDGEN_FFMPEG` | 未设置（PATH 或 `scripts/vendor`） |
+| `SDGEN_CONFIG` | 未设置——显式指定配置文件 |
+| `SDGEN_SESSION` | `$DSH_SESSION_ID`（按会话隔离历史） |
+| `SDGEN_FFMPEG` | 未设置——依次找 `PATH`、`scripts/vendor` |
 
 ## 实测耗时（AMD ROCm gfx1100 / 24 GB）
 
@@ -183,7 +212,8 @@ stable-diffusion-cpp/
   scripts/
     sdgen.py          # 唯一的执行脚本（gen / vid / check / history / session / use / info）
     fetch_vendor.py   # 下载 ffmpeg 到 scripts/vendor（不入库）
-    vendor/           # 运行时生成，已在 .gitignore 中忽略
+    vendor/           # 运行时生成（fetch_vendor.py），已在 .gitignore 中忽略
+  config.example.json # 配置模板：复制为 sdgen.config.json 后填入本机路径
 ```
 
 ## 排障
@@ -191,7 +221,7 @@ stable-diffusion-cpp/
 | 现象 | 处理 |
 |---|---|
 | `400 Failed to load image or audio file` | 把生成图当成了附件。图片已在磁盘上，报路径即可，不要再 `read_image` |
-| `cannot find sd-cli.exe` | `WORK_DIR` / `SD_CLI`；`sdgen.py info` 会列出解析后的全部路径 |
+| `info` 显示 `UNSET` / `needs work_dir, qwen_dir` | 还没配置：复制 `config.example.json` 为 `sdgen.config.json` 并填写 |
 | 请求 1920×1080 得到 1920×1088 | 16 px 网格，见上文 |
 | `--init` 把图裁掉了 | 那是 img2img 的裁切行为；改用 `--outpaint` |
 | 视频全是彩色噪点 | 步数过低或误用 `--scheduler lcm`（那是加速模型调度器） |

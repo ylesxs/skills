@@ -1,5 +1,9 @@
 # runtime dependencies fetched by scripts/fetch_vendor.py (ffmpeg ~87 MB)
 scripts/vendor/
 
+# per-machine configuration - never commit
+config.json
+sdgen.config.json
+
 # generated output
 sdgen-output/

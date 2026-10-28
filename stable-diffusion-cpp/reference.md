@@ -4,8 +4,46 @@ title: stable-diffusion.cpp CLI reference — Qwen-Image 2.1 + Wan2.2 TI2V-5B
 
 # sd.cpp CLI reference
 
-Measured on this machine (AMD ROCm gfx1100, 24 GB, sd.cpp commit `e41fbcf`). The binary is
-`D:\Ai\serves\lib\stable-diffusion\sd-cli.exe`; every model file lives under `D:\Ai\serves\model`.
+Measured on an AMD ROCm gfx1100 / 24 GB machine with sd.cpp commit `e41fbcf`. **No machine path is
+baked into the skill** — `sd-cli.exe`, the model directories, the LoRA folder and ffmpeg are all read
+from configuration ([Configuration](#configuration)); the examples below write `<work_dir>`,
+`<qwen_dir>` and `<wan_dir>` for those values.
+
+## Configuration
+
+Resolution order (first hit wins, env beats file):
+
+1. environment variables — `WORK_DIR`, `SD_CLI`, `ROCM_PATH`, `QWEN_DIR`, `QWEN_MODEL`, `QWEN_VAE`,
+   `QWEN_LLM`, `QWEN_VISION`, `LORA_DIR`, `WAN_DIR`, `MODEL_PATH`, `T5XXL_PATH`, `TAE_PATH`,
+   `VAE_PATH`, `SDGEN_OUT`, `SDGEN_FFMPEG`, `SDGEN_SESSION`, `SDGEN_CONFIG`
+2. a JSON config file, searched in this order:
+   `$SDGEN_CONFIG` → `./sdgen.config.json` (current directory) → `<skill>/config.json`
+3. built-in **filenames** only (`qwen-image-2.1-UC-Q8_0.gguf`, `Wan2.2-TI2V-5B-Q8_0.gguf`, …), which
+   are combined with the configured directories
+
+Start from the template shipped with the skill:
+
+```powershell
+Copy-Item .dsh\skills\stable-diffusion-cpp\config.example.json sdgen.config.json
+# then fill in work_dir / qwen_dir / wan_dir (and rocm_path if you use a shared ROCm install)
+python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py info
+```
+
+| key | env | meaning |
+|---|---|---|
+| `work_dir` | `WORK_DIR` | folder holding `sd-cli.exe` |
+| `sd_cli` | `SD_CLI` | executable name or absolute path (default `sd-cli.exe`) |
+| `rocm_path` | `ROCM_PATH` | optional; prepended to `PATH` only if it exists |
+| `qwen_dir` | `QWEN_DIR` | Qwen-Image 2.1 model directory |
+| `qwen_model` `qwen_vae` `qwen_llm` `qwen_vision` | `QWEN_MODEL` … | override individual files |
+| `lora_dir` | `LORA_DIR` | defaults to `<qwen_dir>/lora` |
+| `wan_dir` | `WAN_DIR` | Wan2.2 model directory |
+| `wan_model` `wan_t5xxl` `wan_tae` `wan_vae` | `MODEL_PATH` `T5XXL_PATH` `TAE_PATH` `VAE_PATH` | override individual files |
+| `out_dir` | `SDGEN_OUT` | default `sdgen-output` |
+| `ffmpeg` | `SDGEN_FFMPEG` | falls back to `PATH`, then `scripts/vendor` |
+
+Anything still unset is reported as `UNSET` by `info`, and `gen`/`vid` refuse to start with the exact
+list of missing keys. A fresh clone with no config therefore fails loudly, never silently.
 
 ## Two stacks
 
@@ -39,7 +77,7 @@ consumes; it is not a statement that this checkpoint is a distilled/Turbo model.
 
 Loads 10.9 GB VRAM. cfg 5.0, scheduler resolves to `discrete`, sampler `euler`, flow-shift 3.0.
 
-## `D:\Ai\serves\model\qwen\image\2.1\start.bat` → CLI mapping
+## `<qwen_dir>\start.bat` → CLI mapping
 
 The bat is a long-running launcher. `sdgen.py` keeps every model/quality choice from it and drops only
 the listener parts that make no sense for a one-shot process:
@@ -170,7 +208,7 @@ renders as background jobs.
 - **img2img** — `--init IMAGE --strength 0.3-0.5` when the structure must survive nearly unchanged.
 - **Inpaint / ControlNet / IP-Adapter** — `--mask`, `--control`, `--ip-adapter` (no extra models are
   installed for the latter two; the flags are wired but will complain about missing weights).
-- **LoRA** — files in `D:\Ai\serves\model\qwen\image\2.1\lora`. The wrapper turns `--lora NAME:0.7`
+- **LoRA** — files in `<lora_dir>` (defaults to `<qwen_dir>/lora`). The wrapper turns `--lora NAME:0.7`
   into the prompt tag `<lora:NAME:0.7>`; sd.cpp logs `apply lora at runtime` and the tensor count.
   Available now: `fusal-qwen-image-2.1-stack-exact-r80`, `qwen-image-anime-nsfw`,
   `qwen2_1-femaledVaginus-nsfw-v1_3-fine_L22-31`.
@@ -258,39 +296,42 @@ Newest 500 entries per session, rewritten atomically:
 
 ## Raw CLI equivalents
 
+`<work_dir>`, `<qwen_dir>`, `<wan_dir>` stand for the configured paths
+(see [Configuration](#configuration)):
+
 ```bat
 :: image
-cd /d D:\Ai\serves\lib\stable-diffusion
+cd /d <work_dir>
 sd-cli.exe -M img_gen ^
-  --diffusion-model D:\Ai\serves\model\qwen\image\2.1\qwen-image-2.1-UC-Q8_0.gguf ^
-  --vae D:\Ai\serves\model\qwen\image\2.1\qwen_image_2.1_vae_bf16.safetensors ^
-  --llm D:\Ai\serves\model\qwen\image\2.1\qwen3vl_8b_int8_convrot.safetensors ^
-  --llm_vision D:\Ai\serves\model\qwen\image\2.1\mmproj-qwen3vl_8b_heretic-f16.gguf ^
-  --lora-model-dir D:\Ai\serves\model\qwen\image\2.1\lora ^
+  --diffusion-model <qwen_dir>\qwen-image-2.1-UC-Q8_0.gguf ^
+  --vae <qwen_dir>\qwen_image_2.1_vae_bf16.safetensors ^
+  --llm <qwen_dir>\qwen3vl_8b_int8_convrot.safetensors ^
+  --llm_vision <qwen_dir>\mmproj-qwen3vl_8b_heretic-f16.gguf ^
+  --lora-model-dir <qwen_dir>\lora ^
   --params-backend disk --steps 16 --cfg-scale 1.0 --sampling-method euler ^
   --diffusion-fa --vae-tiling -W 1024 -H 1024 -s 42 ^
-  -p "a red apple on a wooden table" -o D:\out\apple.png
+  -p "a red apple on a wooden table" -o <out>\apple.png
 
 :: video
 sd-cli.exe -M vid_gen ^
-  --diffusion-model D:\Ai\serves\model\wan\2.2\Wan2.2-TI2V-5B-Q8_0.gguf ^
-  --t5xxl D:\Ai\serves\model\wan\2.2\umt5-xxl-encoder-Q8_0.gguf ^
-  --tae D:\Ai\serves\model\wan\2.2\taew2_2.pth ^
+  --diffusion-model <wan_dir>\Wan2.2-TI2V-5B-Q8_0.gguf ^
+  --t5xxl <wan_dir>\umt5-xxl-encoder-Q8_0.gguf ^
+  --tae <wan_dir>\taew2_2.pth ^
   --cfg-scale 5 --steps 20 --flow-shift 3.0 --fps 24 ^
   -W 832 -H 480 --video-frames 73 -s 42 --diffusion-fa --vae-conv-direct ^
-  -p "a lovely cat walking on the grass" -o D:\out\cat.webm
+  -p "a lovely cat walking on the grass" -o <out>\cat.webm
 ```
 
 ## The two `start.bat` files: what to keep, what to ignore
 
-`model\qwen\image\2.1\start.bat` — a long-running launcher. Model/quality flags are mirrored above; only
+`<qwen_dir>\start.bat` — a long-running launcher. Model/quality flags are mirrored above; only
 its listener flags are meaningless for the one-shot CLI. Its `--steps 25` is a quality choice for a
 non-Turbo checkpoint, not an accelerated-model default.
 
-`model\wan\2.2\start.bat` — a double-click video generator that is **broken for automation**:
+`<wan_dir>\start.bat` — a double-click video generator that is **broken for automation**:
 
 1. `-n "%OUTPUT_NAME%"` is sd.cpp's **negative prompt**, not the filename, and it never passes `-o`, so
-   the clip lands in `D:\Ai\serves\lib\stable-diffusion` under the CLI default name — while the chosen
+   the clip lands in `<work_dir>` under the CLI default name — while the chosen
    name becomes a negative prompt that fights the prompt at cfg>1.
 2. `STEPS=3` + `SCHEDULER=lcm` are LCM/accelerated-setup settings; this checkpoint needs ~20 steps and
    the default scheduler.
@@ -302,12 +343,10 @@ non-Turbo checkpoint, not an accelerated-model default.
 
 ## Environment variables
 
+The full key/env table lives in [Configuration](#configuration). The ones without a config-file twin:
+
 | Variable | Default |
 |---|---|
-| `WORK_DIR` / `SD_CLI` | `D:\Ai\serves\lib\stable-diffusion` / `sd-cli.exe` |
-| `ROCM_PATH` | `C:\Program Files\AMD\ROCm\7.1.1` (optional) |
-| `QWEN_DIR` + `QWEN_MODEL`, `QWEN_VAE`, `QWEN_LLM`, `QWEN_VISION`, `LORA_DIR` | `D:\Ai\serves\model\qwen\image\2.1` |
-| `WAN_DIR` + `MODEL_PATH`, `T5XXL_PATH`, `TAE_PATH`, `VAE_PATH` | `D:\Ai\serves\model\wan\2.2` |
-| `SDGEN_OUT` | `sdgen-output` (relative to the workspace) |
 | `SDGEN_SESSION` | `$DSH_SESSION_ID` (per-conversation history bucket) |
-| `SDGEN_FFMPEG` | unset — ffmpeg comes from PATH or the bundled `scripts/vendor` binary |
+| `SDGEN_CONFIG` | unset — explicit config file path |
+| `SDGEN_FFMPEG` | unset — ffmpeg comes from PATH, then `scripts/vendor` |

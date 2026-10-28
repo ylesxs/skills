@@ -16,6 +16,21 @@ One entry point, two model stacks:
 Both run **`sd-cli.exe` one shot per request** and write timestamped files under `sdgen-output/`.
 The two `start.bat` files stay as the reference for model paths and flags; the CLI wrapper mirrors them.
 
+## Setup (once per machine)
+
+No path is hardcoded. Values come from `sdgen.config.json` in the working directory (or
+`<skill>/config.json`, or `$SDGEN_CONFIG`), with environment variables overriding them:
+
+```powershell
+Copy-Item .dsh\skills\stable-diffusion-cpp\config.example.json sdgen.config.json
+# edit work_dir (folder with sd-cli.exe), qwen_dir, wan_dir; rocm_path is optional
+python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py info
+```
+
+`info` prints `UNSET` for anything missing and `gen`/`vid` refuse to start until it is set, naming the
+exact keys. `config.example.json` documents every key. See
+[reference.md](reference.md#configuration) for the full key → env-var table.
+
 ## ⚠️ Never attach a generated file to the conversation
 
 Calling `read_image` on a produced PNG/JPEG/WebP is the **most common way this skill kills a turn**:
@@ -158,6 +173,7 @@ read from the file's own metadata (PNG tEXt / WebP XMP / AVI chunk) or the `.jso
 
 | Symptom | Fix |
 |---|---|
+| `info` shows `UNSET` / `needs work_dir, qwen_dir` | no config yet: copy `config.example.json` to `sdgen.config.json`, or set the env vars it names. |
 | `400 invalid_request_error: Failed to load image or audio file` | You attached a generated file. The generation is fine and the file is on disk — report its path, and stop calling `read_image`. |
 | `cannot find sd-cli.exe` | `WORK_DIR` / `SD_CLI` env vars; `sdgen.py info` shows every resolved path. |
 | Wanted 1920x1080, got 1920x1088 | the 16 px grid; use `--size` on a 16-grid, or record the real dimensions from the result. |

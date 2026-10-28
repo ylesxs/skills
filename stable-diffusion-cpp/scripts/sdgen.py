@@ -31,25 +31,91 @@ import time
 from pathlib import Path
 
 # --------------------------------------------------------------------------- config
+#
+# Nothing machine-specific is baked in. Values come from (highest priority first):
+#   1. environment variables (WORK_DIR, SD_CLI, QWEN_MODEL, ...)
+#   2. a JSON config file: $SDGEN_CONFIG, ./sdgen.config.json, <skill>/config.json
+#   3. built-in file NAMES only (model filenames are stable; directories are not)
+# Anything still unresolved is reported as "unset" and generation refuses to start.
 
-SD_DIR = Path(os.environ.get("WORK_DIR") or r"D:\Ai\serves\lib\stable-diffusion")
-SD_CLI = os.environ.get("SD_CLI") or "sd-cli.exe"
-ROCM_PATH = Path(os.environ.get("ROCM_PATH") or r"C:\Program Files\AMD\ROCm\7.1.1")
+CONFIG_KEYS = (
+    "work_dir", "sd_cli", "rocm_path",
+    "qwen_dir", "qwen_model", "qwen_vae", "qwen_llm", "qwen_vision", "lora_dir",
+    "wan_dir", "wan_model", "wan_t5xxl", "wan_tae", "wan_vae",
+    "out_dir", "ffmpeg",
+)
+ENV_KEYS = {
+    "work_dir": "WORK_DIR", "sd_cli": "SD_CLI", "rocm_path": "ROCM_PATH",
+    "qwen_dir": "QWEN_DIR", "qwen_model": "QWEN_MODEL", "qwen_vae": "QWEN_VAE",
+    "qwen_llm": "QWEN_LLM", "qwen_vision": "QWEN_VISION", "lora_dir": "LORA_DIR",
+    "wan_dir": "WAN_DIR", "wan_model": "MODEL_PATH", "wan_t5xxl": "T5XXL_PATH",
+    "wan_tae": "TAE_PATH", "wan_vae": "VAE_PATH",
+    "out_dir": "SDGEN_OUT", "ffmpeg": "SDGEN_FFMPEG",
+}
+SKILL_ROOT = Path(__file__).resolve().parent.parent
 
-QWEN_DIR = Path(os.environ.get("QWEN_DIR") or r"D:\Ai\serves\model\qwen\image\2.1")
-QWEN_MODEL = Path(os.environ.get("QWEN_MODEL") or QWEN_DIR / "qwen-image-2.1-UC-Q8_0.gguf")
-QWEN_VAE = Path(os.environ.get("QWEN_VAE") or QWEN_DIR / "qwen_image_2.1_vae_bf16.safetensors")
-QWEN_LLM = Path(os.environ.get("QWEN_LLM") or QWEN_DIR / "qwen3vl_8b_int8_convrot.safetensors")
-QWEN_VISION = Path(os.environ.get("QWEN_VISION") or QWEN_DIR / "mmproj-qwen3vl_8b_heretic-f16.gguf")
-LORA_DIR = Path(os.environ.get("LORA_DIR") or QWEN_DIR / "lora")
 
-WAN_DIR = Path(os.environ.get("WAN_DIR") or r"D:\Ai\serves\model\wan\2.2")
-WAN_MODEL = Path(os.environ.get("MODEL_PATH") or WAN_DIR / "Wan2.2-TI2V-5B-Q8_0.gguf")
-WAN_T5 = Path(os.environ.get("T5XXL_PATH") or WAN_DIR / "umt5-xxl-encoder-Q8_0.gguf")
-WAN_TAE = Path(os.environ.get("TAE_PATH") or WAN_DIR / "taew2_2.pth")
-WAN_VAE = Path(os.environ.get("VAE_PATH") or WAN_DIR / "Wan2.2_VAE.safetensors")
+def config_candidates() -> list[Path]:
+    found = []
+    explicit = os.environ.get("SDGEN_CONFIG")
+    if explicit:
+        found.append(Path(explicit))
+    found.append(Path.cwd() / "sdgen.config.json")
+    found.append(SKILL_ROOT / "config.json")
+    return found
 
-OUT_ROOT = Path(os.environ.get("SDGEN_OUT") or "sdgen-output")
+
+def load_config() -> tuple[dict, Path | None]:
+    values: dict = {}
+    source = None
+    for path in config_candidates():
+        data = None
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            values.update({k: str(v) for k, v in data.items()
+                           if k in CONFIG_KEYS and v not in (None, "")})
+            source = path
+            break
+    for key, env in ENV_KEYS.items():
+        if os.environ.get(env):
+            values[key] = os.environ[env]
+    return values, source
+
+
+CFG, CONFIG_PATH = load_config()
+
+
+def cfg(key: str) -> str | None:
+    return CFG.get(key) or None
+
+
+def p(key: str) -> Path | None:
+    value = cfg(key)
+    return Path(value).expanduser() if value else None
+
+
+SD_DIR = p("work_dir")
+SD_CLI = cfg("sd_cli") or "sd-cli.exe"
+ROCM_PATH = p("rocm_path")
+
+QWEN_DIR = p("qwen_dir")
+QWEN_MODEL = p("qwen_model") or (QWEN_DIR / "qwen-image-2.1-UC-Q8_0.gguf" if QWEN_DIR else None)
+QWEN_VAE = p("qwen_vae") or (QWEN_DIR / "qwen_image_2.1_vae_bf16.safetensors" if QWEN_DIR else None)
+QWEN_LLM = p("qwen_llm") or (QWEN_DIR / "qwen3vl_8b_int8_convrot.safetensors" if QWEN_DIR else None)
+QWEN_VISION = p("qwen_vision") or (QWEN_DIR / "mmproj-qwen3vl_8b_heretic-f16.gguf" if QWEN_DIR else None)
+LORA_DIR = p("lora_dir") or (QWEN_DIR / "lora" if QWEN_DIR else None)
+
+WAN_DIR = p("wan_dir")
+WAN_MODEL = p("wan_model") or (WAN_DIR / "Wan2.2-TI2V-5B-Q8_0.gguf" if WAN_DIR else None)
+WAN_T5 = p("wan_t5xxl") or (WAN_DIR / "umt5-xxl-encoder-Q8_0.gguf" if WAN_DIR else None)
+WAN_TAE = p("wan_tae") or (WAN_DIR / "taew2_2.pth" if WAN_DIR else None)
+WAN_VAE = p("wan_vae") or (WAN_DIR / "Wan2.2_VAE.safetensors" if WAN_DIR else None)
+
+OUT_ROOT = p("out_dir") or Path("sdgen-output")
 IMG_DIR = OUT_ROOT / "img"
 VID_DIR = OUT_ROOT / "vid"
 LOG_DIR = OUT_ROOT / "logs"
@@ -67,20 +133,38 @@ def die(msg: str):
     raise SystemExit(1)
 
 
+def missing_config(keys: list[str]) -> list[str]:
+    return [k for k in keys if not p(k)]
+
+
+def require_config(keys: list[str], purpose: str) -> None:
+    missing = missing_config(keys)
+    if not missing:
+        return
+    where = CONFIG_PATH or "(no config file found)"
+    die(f"{purpose} needs {', '.join(missing)}.\n"
+        f"  config file: {where}\n"
+        f"  set them in sdgen.config.json (copy config.example.json) or via env "
+        f"({', '.join(ENV_KEYS[k] for k in missing)}).")
+
+
 def cli_exe() -> str:
     """Windows CreateProcess does not search the child's cwd - resolve sd-cli.exe ourselves."""
     if os.path.dirname(SD_CLI):
         return SD_CLI
+    if SD_DIR is None:
+        die("sd.cpp install is not configured: set work_dir / $WORK_DIR to the folder "
+            "holding sd-cli.exe")
     candidate = SD_DIR / SD_CLI
     if candidate.is_file():
         return str(candidate)
-    die(f"cannot find {SD_CLI} in {SD_DIR} - set WORK_DIR / SD_CLI to the sd.cpp install")
+    die(f"cannot find {SD_CLI} in {SD_DIR} - check work_dir / $WORK_DIR")
 
 
 def env_for_cli() -> dict:
     env = dict(os.environ)
-    extra = [str(SD_DIR)]
-    if ROCM_PATH.is_dir():
+    extra = [str(SD_DIR)] if SD_DIR else []
+    if ROCM_PATH and ROCM_PATH.is_dir():
         extra += [str(ROCM_PATH / "bin"), str(ROCM_PATH / "lib" / "llvm" / "bin")]
     env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
     return env
@@ -135,8 +219,12 @@ def _extract_sdcpp(text: str) -> dict:
 def metadata(path: Path) -> dict:
     """Container + embedded generation record; never decodes pixels."""
     try:
+        exe = cli_exe()
+    except SystemExit:
+        return {}          # sd.cpp not configured: header/sidecar info only
+    try:
         proc = subprocess.run(
-            [cli_exe(), "-M", "metadata", "--image", str(path), "--metadata-format", "json"],
+            [exe, "-M", "metadata", "--image", str(path), "--metadata-format", "json"],
             cwd=str(SD_DIR), env=env_for_cli(), capture_output=True, text=True,
             timeout=180, stdin=subprocess.DEVNULL,
         )
@@ -279,8 +367,8 @@ def container_of(path: Path) -> str | None:
 
 
 def ffmpeg_exe() -> str | None:
-    """Locate ffmpeg: SDGEN_FFMPEG, then PATH, then the bundled imageio-ffmpeg binary."""
-    explicit = os.environ.get("SDGEN_FFMPEG")
+    """Locate ffmpeg: $SDGEN_FFMPEG / config, then PATH, then the bundled imageio-ffmpeg."""
+    explicit = cfg("ffmpeg")
     if explicit and Path(explicit).is_file():
         return explicit
     on_path = shutil.which("ffmpeg")
@@ -446,7 +534,7 @@ def resolve_source(token: str | None, what: str) -> Path | None:
 
 
 def lora_files() -> list[Path]:
-    if not LORA_DIR.is_dir():
+    if LORA_DIR is None or not LORA_DIR.is_dir():
         return []
     return sorted(LORA_DIR.glob("*.safetensors"))
 
@@ -481,6 +569,7 @@ def cmd_gen(args) -> int:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
     if not prompt:
         die("an empty prompt renders nothing useful - pass a prompt")
+    require_config(["work_dir", "qwen_dir"], "image generation")
 
     prompt, loras = build_lora_tags(args.lora, prompt)
 
@@ -660,6 +749,7 @@ def cmd_vid(args) -> int:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
     if not prompt:
         die("an empty prompt generates noise - pass a prompt")
+    require_config(["work_dir", "wan_dir"], "video generation")
     if args.lora:
         prompt, _ = build_lora_tags(args.lora, prompt)
 
@@ -1002,29 +1092,41 @@ def cmd_use(args) -> int:
 
 
 def cmd_info(args) -> int:
+    exe = Path(SD_CLI) if os.path.dirname(SD_CLI) else (SD_DIR / SD_CLI if SD_DIR else None)
     rows = [
-        ("sd-cli", Path(SD_CLI) if os.path.dirname(SD_CLI) else SD_DIR / SD_CLI),
+        ("sd-cli", exe),
         ("qwen model", QWEN_MODEL), ("qwen vae", QWEN_VAE),
         ("qwen llm", QWEN_LLM), ("qwen vision", QWEN_VISION), ("lora dir", LORA_DIR),
         ("wan model", WAN_MODEL), ("wan t5xxl", WAN_T5),
         ("wan tae", WAN_TAE), ("wan vae", WAN_VAE),
     ]
     ok = True
-    for label, p in rows:
-        exists = p.is_file() or (label.endswith("dir") and p.is_dir())
+    for label, path in rows:
+        if path is None:
+            ok = False
+            print(f"{label:<12} UNSET   (set it in the config file or env)")
+            continue
+        exists = path.is_file() or (label.endswith("dir") and path.is_dir())
         ok = ok and exists
-        print(f"{label:<12} {'ok ' if exists else 'MISSING'} {p}")
-    print(f"{'rocm':<12} {'ok ' if ROCM_PATH.is_dir() else 'n/a (self-contained install)'} "
-          f"{ROCM_PATH}")
+        print(f"{label:<12} {'ok ' if exists else 'MISSING'} {path}")
+    if ROCM_PATH is None:
+        print(f"{'rocm':<12} unset   (optional; only needed for a shared ROCm install)")
+    else:
+        print(f"{'rocm':<12} {'ok ' if ROCM_PATH.is_dir() else 'n/a (self-contained install)'} "
+              f"{ROCM_PATH}")
+    print(f"{'config':<12} {CONFIG_PATH or '(none found - using env only)'}")
     print(f"{'output':<12} {OUT_ROOT.resolve()}")
     print(f"{'session':<12} {_SESSION}  ({len(load_manifest().get('entries', []))} entries, "
           f"{manifest_path().resolve()})")
-    loras = [p.stem for p in lora_files()]
+    loras = [path.stem for path in lora_files()]
     print(f"{'loras':<12} {', '.join(loras) if loras else '(none)'}")
     print("\nimage defaults: 1024x1024, 16 steps, cfg 1.0, sampler euler, scheduler flux, "
           "flow-shift auto, params-backend disk, vae-tiling, png\n"
           "video defaults: 832x480, 20 steps, cfg 5.0, flow-shift 3.0, 72->73 frames @24fps, "
           "tae decoder, mp4 final / avi draft")
+    if CONFIG_PATH is None:
+        print("\nno config file found: copy config.example.json to sdgen.config.json "
+              "(cwd) or <skill>/config.json and fill in your paths")
     return 0 if ok else 1
 
 
