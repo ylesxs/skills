@@ -1,0 +1,203 @@
+# skills
+
+面向 [DeepSeek Harness](https://github.com/deepseek-ai) 的本地技能集合（DSH skills）。每个子目录是一个
+独立的技能包：`SKILL.md` 是模型路由与操作说明，同级资源文件按需加载。
+
+| 技能 | 说明 |
+|---|---|
+| [`stable-diffusion-cpp`](stable-diffusion-cpp/) | 用本机 stable-diffusion.cpp（`sd-cli.exe`）做图片生成/改图/扩图，以及 Wan2.2 文生视频、图生视频 |
+
+安装方式：把技能目录复制到项目的 `.dsh/skills/`（项目级）或 `~/.agents/skills/`（用户级）即可，DSH 会在下一个会话自动发现。
+
+```powershell
+git clone https://github.com/ylesxs/skills.git
+Copy-Item -Recurse skills\stable-diffusion-cpp <project>\.dsh\skills\
+```
+
+---
+
+# stable-diffusion-cpp
+
+本地图片 + 视频生成技能。**全部通过 `sd-cli.exe` 一次进程完成**，不需要常驻 HTTP 服务、没有任务队列。
+
+| 命令 | 模型 | 用途 |
+|---|---|---|
+| `gen` | Qwen-Image 2.1 UC (Q8_0) | 文生图、参考图改图、img2img、扩图（outpaint）、LoRA、批量 |
+| `vid` | Wan2.2 TI2V-5B | 文生视频、图生视频 |
+| `check` | — | 读文件内嵌元数据/边车，报告尺寸、帧数、seed、步数、是否可安全附赠 |
+| `history` / `session` / `use` | — | 按会话隔离的改图链条、`latest` / `@N` 引用 |
+| `info` | — | 模型栈、默认值、可用 LoRA、当前会话 |
+
+## 依赖
+
+1. **stable-diffusion.cpp**：`sd-cli.exe`（本仓库只调用，不分发）。默认路径
+   `D:\Ai\serves\lib\stable-diffusion\`，可用 `WORK_DIR` / `SD_CLI` 覆盖。
+2. **图片模型栈**（默认 `D:\Ai\serves\model\qwen\image\2.1\`）：
+
+   | 文件 | 作用 | 大小 |
+   |---|---|---|
+   | `qwen-image-2.1-UC-Q8_0.gguf` | 扩散模型（`qwen_image21`，非 Turbo 版） | 7.6 GB |
+   | `qwen3vl_8b_int8_convrot.safetensors` | 文本编码器 | 9.4 GB |
+   | `mmproj-qwen3vl_8b_heretic-f16.gguf` | 视觉塔 | 1.2 GB |
+   | `qwen_image_2.1_vae_bf16.safetensors` | VAE | 0.7 GB |
+   | `lora/*.safetensors` | 可选 LoRA | — |
+
+3. **视频模型栈**（默认 `D:\Ai\serves\model\wan\2.2\`）：`Wan2.2-TI2V-5B-Q8_0.gguf`（5.0 GB）、
+   `umt5-xxl-encoder-Q8_0.gguf`（5.6 GB）、`taew2_2.pth`（22 MB）、`Wan2.2_VAE.safetensors`（1.4 GB）。
+4. **ffmpeg**：mp4 输出与扩图的 canvas/mask 需要。`scripts/vendor/` 里的 87 MB 二进制不入库，克隆后执行一次：
+
+   ```powershell
+   python scripts\fetch_vendor.py
+   ```
+
+   也可直接 `SDGEN_FFMPEG=<path to ffmpeg.exe>` 或让 `ffmpeg` 出现在 `PATH` 中。
+
+## 快速开始
+
+在项目工作目录下执行（路径按技能实际安装位置调整）：
+
+```powershell
+$S = ".dsh\skills\stable-diffusion-cpp\scripts\sdgen.py"
+
+# 文生图（1024x1024、16 步）
+python $S gen "a red apple on a wooden table, window light"
+
+# 改图：只描述要改的地方，从上一张继续
+python $S gen "make the apple bright blue, keep table and light" --ref latest
+
+# 扩图：保留整幅原图，把画幅扩到 16:9（1536x864 恰为 16:9 且符合 16px 网格）
+python $S gen "the same room continued to the sides, matching light" --init photo.png --outpaint 1536x864
+
+# 文生视频：成品默认 mp4，草稿用 avi
+python $S vid "a red fox trotting through fresh snow, slow camera push-in"
+python $S vid "<shot>" --frames 21 --steps 8 --draft
+
+# 图生视频：图片作首帧，提示词只写动作与运镜
+python $S vid "she slowly turns her head and smiles" --image latest
+
+# 核对成品（不打开图片）
+python $S check sdgen-output\img\sd-20261028-121821.png
+```
+
+## 关键约定
+
+### 1. 绝不把生成结果作为附件读回对话
+
+`read_image` 一张生成图是本技能最容易毁掉整轮对话的操作：
+
+```
+400 invalid_request_error: Failed to load image or audio file
+```
+
+图片超过 **4 MB** 或任一边超过 **2048 px** 时，DSH 会先重编码成 WebP 再发送，网关会拒绝；
+此外部分网关本来就拒绝图片 tool result。正确做法：**只报路径**，用 `check` 获取事实信息
+（尺寸、帧数、seed、步数、prompt、`attach_ok`）。`check` 会显式打印
+`do NOT read_image this file - report the path instead`。
+
+### 2. 尺寸对齐 16 px（Qwen-Image）
+
+DiT patch（2×2）× VAE（8×）= 16 px 网格，sd.cpp 会**静默取整**：请求 `1920x1080`，实际得到
+`1920x1088`。脚本会先向上对齐并提示，结果里同时记录 `requested_size` 与实际 `width`/`height`。
+精确 16:9 尺寸：**1024×576、1536×864、2048×1152、2560×1440**。
+
+### 3. 扩图用 `--outpaint`，不要用 `--init`
+
+`--init` 是 img2img：会把原图**居中裁切**到目标画幅，边缘信息丢失。要保留整幅图并扩展画幅，用
+`--outpaint WxH --init IMG`：脚本用 ffmpeg 生成 canvas（原图缩放居中、边距填中性灰）与 mask
+（原图区域黑、新增区域白），然后 `-i canvas --mask mask --strength 1.0`，只重绘新增边距。
+
+### 4. 视频容器：成品 mp4，草稿 avi
+
+sd.cpp 本身只能写 `.webm` / `.avi` / 动画 `.webp`。技能的做法：
+
+| 命令 | 产物 | 说明 |
+|---|---|---|
+| `vid ...` | `.mp4` | sd.cpp 先快速写 AVI，再由 ffmpeg 一遍编码成 H.264（`yuv420p`、`+faststart`、CRF 20），并写入 title/comment 元数据 |
+| `vid ... --draft` | `.avi` | 原生直写，无编码步骤，用于草稿/快速预览 |
+| `--format avi\|webm\|webp\|mp4` | 对应容器 | 显式覆盖 |
+
+### 5. 每个对话独立的改图链条
+
+历史清单按 DSH 会话隔离：`sdgen-output/.sessions/<session-id>.json`。`latest` 与 `@N` 只在当前会话内
+解析，多个对话并排跑不会互相干扰；每条记录带 `parents`，改图链条可回溯。跨会话接力用
+`--session <id>`，或 `use <file>` 注册外部图片。
+
+### 6. 已验证的默认参数
+
+图像默认值是照旧 `:8993` 服务基线复刻的：**1024×1024、16 步、cfg 1.0、euler、flux、vae-tiling、
+params-backend disk**。同一 prompt + seed + 尺寸 + 步数下，本 CLI 与旧服务输出**字节级一致**
+（PNG 2,429,239 B，MD5 `93479ac4db24f49cb1d58ee5df88666c`）。`--steps 25` 对应 `start.bat` 启动值，
+`--steps 8 --size 512x512` 是约 12 秒的草稿档。
+
+## 参数速查
+
+| 参数 | 适用 | 默认 | 说明 |
+|---|---|---|---|
+| `--size WxH` | gen/vid | 1024x1024 / 832x480 | 图像对齐 16 px，视频对齐 8 px |
+| `--steps` | gen/vid | 16 / 20 | 图像低于 10 步明显发软 |
+| `--cfg` | gen/vid | 1.0 / 5.0 | 图像不要调高 |
+| `--seed` | gen/vid | 随机并回显 | 复现与迭代用 |
+| `--ref IMG` | gen | — | 参考图改图（`latest` / `@N`） |
+| `--init IMG` | gen | — | img2img 起点（会裁切） |
+| `--outpaint WxH` | gen | — | 扩图，需配合 `--init` |
+| `--strength` | gen | 0.75（扩图 1.0） | img2img 去噪强度 |
+| `--lora NAME[:W]` | gen | — | 可重复，名称见 `info` |
+| `--flow-shift F` | gen/vid | auto / 3.0 | 改变 sigma 调度，同 seed 结果不同 |
+| `--format` | gen/vid | png / mp4 | 视频 `--draft` 时默认 avi |
+| `--frames` / `--fps` | vid | 72→73 / 24 | 帧数吸附到 4k+1 |
+| `--decoder tae\|vae` | vid | tae | vae 更锐但更慢 |
+| `--low-vram` | gen/vid | 关 | 权重卸载 CPU + VAE 分块 |
+
+## 环境变量
+
+| 变量 | 默认 |
+|---|---|
+| `WORK_DIR` / `SD_CLI` | `D:\Ai\serves\lib\stable-diffusion` / `sd-cli.exe` |
+| `QWEN_DIR`、`QWEN_MODEL`、`QWEN_VAE`、`QWEN_LLM`、`QWEN_VISION`、`LORA_DIR` | `D:\Ai\serves\model\qwen\image\2.1` |
+| `WAN_DIR`、`MODEL_PATH`、`T5XXL_PATH`、`TAE_PATH`、`VAE_PATH` | `D:\Ai\serves\model\wan\2.2` |
+| `SDGEN_OUT` | `sdgen-output`（相对当前工作目录） |
+| `SDGEN_SESSION` | `$DSH_SESSION_ID` |
+| `SDGEN_FFMPEG` | 未设置（PATH 或 `scripts/vendor`） |
+
+## 实测耗时（AMD ROCm gfx1100 / 24 GB）
+
+| 任务 | 参数 | 耗时 |
+|---|---|---|
+| 图片 | 512×512 / 4 步 | 12–18 s |
+| 图片 | 1024×1024 / 8 步 | ~104 s |
+| 图片 | 1024×1024 / 16 步（默认） | ~187 s |
+| 图片 | 1024×1024 / 25 步 | ~296 s |
+| 扩图 | 1536×864 / 8 步 | ~48 s |
+| 视频 | 21 帧 / 20 步（832×480） | ~172 s |
+| 视频 | 73 帧 / 20 步（832×480） | ~966 s |
+| 视频 | 21 帧 / 8 步 i2v（含 mp4 编码） | ~78 s |
+
+视频耗时随帧数超线性增长（≈ 帧数^1.6），1280×704 再乘约 2.2。实拍渲染请放在后台作业里跑。
+
+## 目录结构
+
+```
+stable-diffusion-cpp/
+  SKILL.md            # 技能入口：路由描述 + 操作说明
+  reference.md        # 参数映射、模型栈、容器、历史结构、排障
+  scripts/
+    sdgen.py          # 唯一的执行脚本（gen / vid / check / history / session / use / info）
+    fetch_vendor.py   # 下载 ffmpeg 到 scripts/vendor（不入库）
+    vendor/           # 运行时生成，已在 .gitignore 中忽略
+```
+
+## 排障
+
+| 现象 | 处理 |
+|---|---|
+| `400 Failed to load image or audio file` | 把生成图当成了附件。图片已在磁盘上，报路径即可，不要再 `read_image` |
+| `cannot find sd-cli.exe` | `WORK_DIR` / `SD_CLI`；`sdgen.py info` 会列出解析后的全部路径 |
+| 请求 1920×1080 得到 1920×1088 | 16 px 网格，见上文 |
+| `--init` 把图裁掉了 | 那是 img2img 的裁切行为；改用 `--outpaint` |
+| 视频全是彩色噪点 | 步数过低或误用 `--scheduler lcm`（那是加速模型调度器） |
+| 要 mp4 却得到 avi | 找不到 ffmpeg 或编码失败；结果 JSON 的 `container_note` 有原因 |
+| 显存不足 | `--low-vram`、减小尺寸/帧数，或关闭其它占用显存的 sd.cpp 进程 |
+
+## 许可
+
+本仓库代码以 [MIT](LICENSE) 发布。`scripts/vendor/` 中的 ffmpeg 由 `imageio-ffmpeg` 分发，遵循其自身许可（GPL 构建），不随本仓库提交。
