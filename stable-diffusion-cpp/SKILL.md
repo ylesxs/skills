@@ -1,7 +1,7 @@
 ---
 name: stable-diffusion-cpp
 description: Generate or edit images and videos with the local stable-diffusion.cpp CLI (Qwen-Image 2.1 + Wan2.2 TI2V-5B). Use when asked to 画图、生成图片、出图、文生图、改图/编辑图片、生成视频、文生视频、图生视频、让这张图动起来, or to "generate / edit an image", "make a video / clip", "animate this picture" locally, or to inspect a produced file (size, frames, seed, prompt).
-whenToUse: The user wants a picture or a short clip produced locally, wants an existing picture edited or animated, or wants a finished file inspected. One script drives both models through sd-cli.exe.
+whenToUse: The user wants a picture or a short clip produced locally, wants an existing picture edited or animated, or wants a finished file inspected. One script drives both models through sd-cli.exe. Works with any agent runtime (DSH, Claude Code, Codex, Cursor, custom loops).
 ---
 
 # Local image + video generation (sd.cpp CLI)
@@ -16,59 +16,65 @@ One entry point, two model stacks:
 Both run **`sd-cli.exe` one shot per request** and write timestamped files under `sdgen-output/`.
 The two `start.bat` files stay as the reference for model paths and flags; the CLI wrapper mirrors them.
 
+**Install (any agent):** copy this folder into your skills directory — `.dsh/skills/`,
+`~/.agents/skills/`, `.claude/skills/`, or simply keep it in the repo and point the agent at
+`<skill>/SKILL.md`. Requires Python 3.8+ and a local stable-diffusion.cpp build; the repository
+README covers dependencies and per-agent wiring.
+
+
 ## Setup (once per machine)
 
 No path is hardcoded. Values come from `sdgen.config.json` in the working directory (or
 `<skill>/config.json`, or `$SDGEN_CONFIG`), with environment variables overriding them:
 
 ```powershell
-Copy-Item .dsh\skills\stable-diffusion-cpp\config.example.json sdgen.config.json
+Copy-Item <skill>/config.example.json sdgen.config.json
 # edit work_dir (folder with sd-cli.exe), qwen_dir, wan_dir; rocm_path is optional
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py info
+python <skill>/scripts/sdgen.py info
 ```
 
 `info` prints `UNSET` for anything missing and `gen`/`vid` refuse to start until it is set, naming the
 exact keys. `config.example.json` documents every key. See
 [reference.md](reference.md#configuration) for the full key → env-var table.
 
-## ⚠️ Never attach a generated file to the conversation
+## ⚠️ Do not attach a generated file to the conversation
 
-Calling `read_image` on a produced PNG/JPEG/WebP is the **most common way this skill kills a turn**:
+Reading a produced PNG/JPEG/WebP back into the model context is the most common way this skill loses
+a turn. Many harnesses and gateways reject image tool results, and the failure arrives *after* the
+file was written:
 
 ```
 400 invalid_request_error: Failed to load image or audio file
 ```
 
-The generation already succeeded by then — only the reply dies, and the turn is lost. Why it happens:
+Concrete case: DeepSeek Harness passes an attachment through untouched only while it is **≤ 4 MB and
+≤ 2048 px** on both sides; outside that it re-encodes to WebP and the gateway refuses it. Other
+clients simply do not accept image parts at all.
 
-- files larger than **4 MB** or **2048 px** on a side are re-encoded (to WebP) before being sent, and
-  the gateway rejects that;
-- on top of that, image tool results are refused by several model gateways regardless of size.
+So: **report the path, do not look at the file.** `check` gives you every fact you need (size, seed,
+steps, prompt, `attach_ok`). If a visual judgement is genuinely required, ask the user to look — a
+doomed attachment costs the whole turn.
 
-So: **report the path, do not look at the file.** Use `check` for every fact you need
-(size, seed, steps, prompt, whether it is attachable). If you genuinely need a visual judgement, say
-so and let the user look — do not spend the turn on a doomed attachment.
-
-`check` prints an explicit line for this (`do NOT read_image this file`) and flags
-`attach_ok: false` when the file is over budget.
+`check` prints `do NOT read_image this file` for every file, and adds the budget explanation when
+`attach_ok` is false.
 
 ## Images
 
 ```powershell
 # text to image
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py gen "a red apple on a wooden table, window light"
+python <skill>/scripts/sdgen.py gen "a red apple on a wooden table, window light"
 
 # edit: describe ONLY the change, starting from an existing image
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py gen "make the apple bright blue, keep table and light" --ref latest
+python <skill>/scripts/sdgen.py gen "make the apple bright blue, keep table and light" --ref latest
 
 # img2img when the structure must stay exact
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py gen "same scene, golden hour" --init latest --strength 0.4
+python <skill>/scripts/sdgen.py gen "same scene, golden hour" --init latest --strength 0.4
 
 # outpaint / 扩图: keep the whole picture and let the model fill a wider frame
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py gen "the same room continued to the sides, same light" --init "C:\path\photo.png" --outpaint 1536x864
+python <skill>/scripts/sdgen.py gen "the same room continued to the sides, same light" --init "C:/path/photo.png" --outpaint 1536x864
 
 # LoRA by name (repeatable), weight after the colon
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py gen "portrait of a woman" --lora qwen-image-anime-nsfw:0.7
+python <skill>/scripts/sdgen.py gen "portrait of a woman" --lora qwen-image-anime-nsfw:0.7
 ```
 
 - `--ref` is the good default for visible edits (Qwen-Image reference editing keeps pose, framing and
@@ -96,13 +102,13 @@ python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py gen "portrait of a woma
 
 ```powershell
 # final: mp4 (H.264, faststart) — sd.cpp writes a fast AVI, then one ffmpeg pass encodes it
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py vid "a red fox trotting through fresh snow, slow camera push-in, soft morning light"
+python <skill>/scripts/sdgen.py vid "a red fox trotting through fresh snow, slow camera push-in, soft morning light"
 
 # draft / quick preview: avi, written natively by sd.cpp (no encode step, ~1 s faster, bigger file)
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py vid "<shot>" --frames 21 --steps 8 --draft
+python <skill>/scripts/sdgen.py vid "<shot>" --frames 21 --steps 8 --draft
 
 # image to video: the picture is the first frame, the prompt describes ONLY the motion
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py vid "she slowly turns her head and smiles" --image latest
+python <skill>/scripts/sdgen.py vid "she slowly turns her head and smiles" --image latest
 ```
 
 - **English** prompts. One line of content + one of motion/camera; present continuous verbs; one shot.
@@ -110,7 +116,7 @@ python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py vid "she slowly turns h
   "intermediate / preview" mode — say nothing about mp4 when drafting). `--format avi|webm|webp|mp4`
   overrides. mp4 is encoded with the bundled ffmpeg (`scripts/vendor`, H.264 + `yuv420p` + faststart,
   title/comment carry prompt+seed+steps so the file survives being copied away from its sidecar).
-  On a fresh clone run `python scripts\fetch_vendor.py` once to install it, or set `SDGEN_FFMPEG`.
+  On a fresh clone run `python scripts/fetch_vendor.py` once to install it, or set `SDGEN_FFMPEG`.
 - `--frames` is snapped to **4k+1** (Wan's temporal stride): 72 becomes 73. 121 ≈ 5 s is the ceiling.
 - Cost is dominated by frames: 21 frames / 20 steps ≈ 3 min, 73 frames / 20 steps ≈ 16 min at 832x480,
   1280x704 ≈ 2.2× that. Always draft small first, and start the final as a **background job**.
@@ -132,11 +138,11 @@ python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py vid "she slowly turns h
 ## Iterating: never re-invent the scene
 
 ```powershell
-$S = ".dsh\skills\stable-diffusion-cpp\scripts\sdgen.py"
+$S = "<skill>/scripts/sdgen.py"       # <skill> = the folder you installed this skill in
 python $S history                          # @N index, prompt, seed, file per generation
 python $S gen "<one change>" --ref "@3"            # branch from an earlier take
 python $S gen "<one change>" --ref latest          # continue from the newest image
-python $S use "C:\path\upload.png" --note "user photo"   # register any existing picture
+python $S use "C:/path/upload.png" --note "user photo"   # register any existing picture
 ```
 
 - `latest` = newest **image** of this conversation (a newer video does not shadow it),
@@ -146,15 +152,18 @@ python $S use "C:\path\upload.png" --note "user photo"   # register any existing
 
 ### Each conversation gets its own refinement chain
 
-History is keyed by the DSH **session id** (`$env:DSH_SESSION_ID`), so two chats running side by side
-never fight over `latest` or `@N`:
+History is keyed by a session id, so two conversations running side by side never fight over
+`latest` or `@N`. Works with any agent:
 
-- `sdgen-output/.sessions/<session-id>.json` — one manifest per conversation, up to 500 entries.
-- The chain survives turns and restarts of the same conversation: `--ref latest` keeps refining the
-  previous result, and each entry records `parents`, so the trail is auditable.
-- A brand-new conversation starts empty (no accidental inheritance). To deliberately continue another
-  chain: `--session <id>` on `gen`/`vid`/`history`, or register a file with `use`.
-- Inspect: `python $S session` (this bucket + others), `python $S history --all`, `python $S info`.
+- `--session NAME` wins if given.
+- otherwise `$SDGEN_SESSION`, then whatever your agent exports (`DSH_SESSION_ID`,
+  `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, `GEMINI_SESSION_ID`, `AGENT_SESSION_ID`,
+  `TERM_SESSION_ID`), then a key derived from the working directory.
+- `sdgen-output/.sessions/<key>.json` — one manifest per conversation, up to 500 entries; it survives
+  turns and restarts of the same conversation, and `--ref latest` keeps refining the previous result.
+- A new conversation starts empty. Continue another chain deliberately with `--session <id>` on
+  `gen`/`vid`/`history`, or register a file with `use`.
+- Inspect: `python $S session` (which bucket, and where it came from), `python $S history --all`.
 
 - `--name iter-fox` keeps the version trail readable (`iter-fox-<timestamp>.mp4`, or `.avi` drafts).
 - Every run is recorded in `sdgen-output/.sdgen-history.json`; files are timestamped, never overwritten.
@@ -162,7 +171,7 @@ never fight over `latest` or `@N`:
 ## Verify, don't re-read
 
 ```powershell
-python sdgen.py check sdgen-output\img\sd-20261027-215433.png sdgen-output\vid\sd-20261027-215518.webm
+python sdgen.py check sdgen-output/img/sd-20261027-215433.png sdgen-output/vid/sd-20261027-215518.webm
 ```
 
 Reports container, dimensions, frames/duration, seed, steps, sampler, prompt, LoRAs and `attach_ok` —

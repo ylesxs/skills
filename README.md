@@ -1,18 +1,32 @@
 # skills
 
-面向 [DeepSeek Harness](https://github.com/deepseek-ai) 的本地技能集合（DSH skills）。每个子目录是一个
-独立的技能包：`SKILL.md` 是模型路由与操作说明，同级资源文件按需加载。
+通用 **Agent Skills** 集合：每个子目录是一个独立技能包，入口是 `SKILL.md`（YAML frontmatter + 操作说明），
+同级资源文件按需加载。不绑定任何单一运行时——任何支持 `SKILL.md` 约定的 agent（DeepSeek Harness、
+Claude Code、Codex CLI、Cursor、自研循环）都能直接使用，纯命令行、无网络依赖。
 
 | 技能 | 说明 |
 |---|---|
-| [`stable-diffusion-cpp`](stable-diffusion-cpp/) | 用本机 stable-diffusion.cpp（`sd-cli.exe`）做图片生成/改图/扩图，以及 Wan2.2 文生视频、图生视频 |
+| [`stable-diffusion-cpp`](stable-diffusion-cpp/) | 用本机 stable-diffusion.cpp（`sd-cli.exe`）做图片生成 / 改图 / 扩图，以及 Wan2.2 文生视频、图生视频 |
 
-安装方式：把技能目录复制到项目的 `.dsh/skills/`（项目级）或 `~/.agents/skills/`（用户级）即可，DSH 会在下一个会话自动发现。
+## 安装到不同 agent
+
+技能目录是自包含的，整个文件夹复制过去即可：
+
+| 运行时 | 放置位置 | 生效方式 |
+|---|---|---|
+| DeepSeek Harness | `<project>/.dsh/skills/` 或 `~/.agents/skills/` | 下一次会话自动出现在技能目录 |
+| Claude Code / Agent Skills | `<project>/.claude/skills/` 或 `~/.claude/skills/` | 自动发现 `SKILL.md` |
+| Codex CLI / Cursor / 读 `AGENTS.md` 的工具 | 任意位置（例如仓库根） | 由仓库根的 [`AGENTS.md`](AGENTS.md) 指向技能 |
+| 自研 agent / 其他框架 | 任意位置 | 把 `<skill>/SKILL.md` 注入系统提示或工具说明，允许其执行 shell |
 
 ```powershell
 git clone https://github.com/ylesxs/skills.git
-Copy-Item -Recurse skills\stable-diffusion-cpp <project>\.dsh\skills\
+Copy-Item -Recurse skills\stable-diffusion-cpp <project>\.dsh\skills\   # 或 .claude\skills\
 ```
+
+frontmatter 只依赖 `name` + `description` 两个字段；`whenToUse` 属于可选元数据，其他加载器会忽略。
+技能本身只调用 Python 3.8+ 标准库（无第三方包、无网络、无常驻进程），因此任何能执行 shell 命令的
+agent 都能驱动它。
 
 ---
 

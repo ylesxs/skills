@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """sdgen.py - local image + video generation through stable-diffusion.cpp (sd-cli.exe).
 
+Agent-agnostic: plain Python 3.8+, stdlib only, no network, no server. Any agent that
+can run a shell command can drive it.
+
 Two model stacks, one entry point:
 
   gen  Qwen-Image 2.1 UC (Q8, not a Turbo build)  photos, art, reference-guided edits, img2img
@@ -8,16 +11,16 @@ Two model stacks, one entry point:
 
 Everything runs as a one-shot CLI process. Each run writes a log, a sidecar and a
 per-session manifest entry (so `history`, `latest` and `@N` keep a refinement chain
-that survives turns, isolated per DSH session).
+that survives turns, isolated per agent session).
 
-Paths are overridable with the same environment variables the original start.bat
-files use: WORK_DIR, SD_CLI, ROCM_PATH, MODEL_PATH, T5XXL_PATH, TAE_PATH, VAE_PATH,
-plus QWEN_DIR, WAN_DIR, SDGEN_OUT and SDGEN_SESSION.
+Configuration comes from a JSON file or environment variables - nothing machine
+specific is baked in (see `info` and reference.md#configuration).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import math
@@ -376,7 +379,9 @@ def ffmpeg_exe() -> str | None:
         return on_path
     vendor = Path(__file__).resolve().parent / "vendor"
     if vendor.is_dir():
-        found = sorted(vendor.rglob("ffmpeg*.exe"))
+        # imageio-ffmpeg ships ffmpeg-win-x86_64-*.exe / ffmpeg-linux-* / ffmpeg-macos-*
+        found = sorted(p for p in vendor.rglob("ffmpeg*")
+                       if p.is_file() and not p.name.endswith((".py", ".txt", ".md")))
         if found:
             return str(found[-1])
     return None
@@ -416,16 +421,40 @@ def find_outputs(folder: Path, stem: str, started: float) -> list[Path]:
 
 # --------------------------------------------------------------------------- manifest
 #
-# One manifest per DSH session, so parallel conversations never see each other's
-# `latest` / `@N`. The session key comes from --session, then SDGEN_SESSION, then
-# DSH_SESSION_ID (set by the harness), then "default".
+# One manifest per agent session, so parallel conversations never see each other's
+# `latest` / `@N`. Nothing here is harness-specific: --session wins, then SDGEN_SESSION,
+# then whatever session id the surrounding agent exports, then a key derived from the
+# working directory (so separate checkouts never share a chain).
 
 _SESSION = "default"
+SESSION_ENV_VARS = (
+    "SDGEN_SESSION",
+    "DSH_SESSION_ID",          # DeepSeek Harness
+    "CLAUDE_SESSION_ID",       # Claude Code / Agent SDK
+    "CODEX_SESSION_ID",        # Codex CLI
+    "GEMINI_SESSION_ID",       # Gemini CLI
+    "AGENT_SESSION_ID",        # generic
+    "TERM_SESSION_ID",         # plain terminals
+)
+
+
+def session_source() -> str:
+    for name in SESSION_ENV_VARS:
+        if os.environ.get(name):
+            return f"${name}"
+    return "cwd-derived (set SDGEN_SESSION to pin one)"
 
 
 def session_key(explicit: str | None = None) -> str:
-    raw = (explicit or os.environ.get("SDGEN_SESSION")
-           or os.environ.get("DSH_SESSION_ID") or "default")
+    raw = explicit
+    if not raw:
+        for name in SESSION_ENV_VARS:
+            if os.environ.get(name):
+                raw = os.environ[name]
+                break
+    if not raw:
+        digest = hashlib.sha1(str(Path.cwd().resolve()).encode("utf-8")).hexdigest()[:10]
+        raw = f"cwd-{digest}"
     key = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-.")[:80]
     return key or "default"
 
@@ -1048,16 +1077,14 @@ def cmd_session(args) -> int:
             "manifest": str(manifest_path().resolve()),
             "entries": len(data.get("entries", [])),
             "index": data.get("index", 0),
-            "source": ("--session" if args.session else
-                       "SDGEN_SESSION" if os.environ.get("SDGEN_SESSION") else
-                       "DSH_SESSION_ID" if os.environ.get("DSH_SESSION_ID") else "default"),
+            "source": "--session" if args.session else session_source(),
             "other_sessions": {p.stem: len(json.loads(p.read_text(encoding="utf-8"))
                                           .get("entries", []))
                                for p in sorted(SESSIONS_DIR.glob("*.json"))
                                if p.stem != name} if SESSIONS_DIR.is_dir() else {},
         }, indent=2))
         return 0
-    print(f"session     {name}")
+    print(f"session     {name}   (from {session_source()})")
     print(f"manifest    {manifest_path().resolve()}  ({len(data.get('entries', []))} entries)")
     if SESSIONS_DIR.is_dir():
         others = [(p.stem, len(json.loads(p.read_text(encoding="utf-8")).get("entries", [])))
@@ -1067,7 +1094,8 @@ def cmd_session(args) -> int:
             for stem, count in others:
                 print(f"  {stem}  ({count} entries)")
     print("\n`latest` / `@N` resolve inside this session only. "
-          "Use --session NAME on any command to look at another one.")
+          "Use --session NAME on any command to look at another one, "
+          "or set SDGEN_SESSION to pin the bucket explicitly.")
     return 0
 
 
@@ -1145,7 +1173,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--name", default="sd", help="filename stem prefix (default sd)")
         sp.add_argument("--json", action="store_true", help="machine-readable result")
         sp.add_argument("--session", help="history bucket to use "
-                                          "(default: $SDGEN_SESSION, $DSH_SESSION_ID, 'default')")
+                                          "(default: --session > $SDGEN_SESSION > the agent's own "
+                                          "session env var > cwd-derived key)")
 
     def common_run(sp):
         sp.add_argument("--timeout", type=float, default=3600, help="seconds before giving up")

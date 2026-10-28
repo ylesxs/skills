@@ -21,12 +21,13 @@ Resolution order (first hit wins, env beats file):
 3. built-in **filenames** only (`qwen-image-2.1-UC-Q8_0.gguf`, `Wan2.2-TI2V-5B-Q8_0.gguf`, …), which
    are combined with the configured directories
 
-Start from the template shipped with the skill:
+<skill> is wherever you installed this folder (`.dsh/skills/`, `~/.agents/skills/`,
+`.claude/skills/`, or a clone of the repo). Start from the template shipped with the skill:
 
 ```powershell
-Copy-Item .dsh\skills\stable-diffusion-cpp\config.example.json sdgen.config.json
+Copy-Item <skill>/config.example.json sdgen.config.json
 # then fill in work_dir / qwen_dir / wan_dir (and rocm_path if you use a shared ROCm install)
-python .dsh\skills\stable-diffusion-cpp\scripts\sdgen.py info
+python <skill>/scripts/sdgen.py info
 ```
 
 | key | env | meaning |
@@ -77,7 +78,7 @@ consumes; it is not a statement that this checkpoint is a distilled/Turbo model.
 
 Loads 10.9 GB VRAM. cfg 5.0, scheduler resolves to `discrete`, sampler `euler`, flow-shift 3.0.
 
-## `<qwen_dir>\start.bat` → CLI mapping
+## `<qwen_dir>/start.bat` → CLI mapping
 
 The bat is a long-running launcher. `sdgen.py` keeps every model/quality choice from it and drops only
 the listener parts that make no sense for a one-shot process:
@@ -142,15 +143,19 @@ Consequences:
 - Every run also writes `<stem>.json` (sidecar) and `sdgen-output/logs/<stem>.log` (full sd-cli log).
 - `check` prefers embedded metadata, falls back to the sidecar, then to header dimensions.
 
-### Attachment budget (why `read_image` is forbidden)
+### Do not attach generated files (budget)
 
-DSH passes an attachment through untouched only while it is **≤ 2048 px on both sides and ≤ 4 MB**;
-outside that it re-encodes to WebP, and the model gateway answers
-`400 invalid_request_error: Failed to load image or audio file`. Several gateways reject image tool
-results even inside the budget, so the rule is absolute: never attach a generated file.
+Every harness draws its own line, and crossing it costs the turn. DeepSeek Harness, for example, passes
+an attachment through untouched only while it is **≤ 2048 px on both sides and ≤ 4 MB**; outside that
+it re-encodes to WebP and the gateway answers
+`400 invalid_request_error: Failed to load image or audio file`. Other clients reject image parts
+outright.
 
-`check` computes `attach_ok` and says so explicitly. Real case: a 1920×1088 PNG at **4.24 MB** was
-attached and killed the turn — the picture itself was fine and still on disk.
+`check` computes `attach_ok` against that budget and says so explicitly. Real case: a 1920×1088 PNG at
+**4.24 MB** was attached and killed the turn — the picture itself was fine and still on disk.
+
+The portable rule therefore is: never attach a generated file; report the path and let the human (or
+the client UI) open it.
 
 ### Video containers
 
@@ -252,8 +257,8 @@ renders as background jobs.
 
 ## History, sessions and the refinement chain
 
-**One manifest per DSH session**, so parallel conversations cannot see or borrow each other's
-`latest` / `@N`:
+**One manifest per agent session**, so parallel conversations cannot see or borrow each other's
+`latest` / `@N`. Nothing here is harness-specific:
 
 ```
 sdgen-output/
@@ -262,9 +267,11 @@ sdgen-output/
   img/ vid/ logs/
 ```
 
-Session key resolution: `--session NAME` → `$SDGEN_SESSION` → `$DSH_SESSION_ID` (set by the harness) →
-`default`. A pre-session `sdgen-output/.sdgen-history.json` is migrated into the first session that
-loads it and renamed `*.legacy.json`.
+Session key resolution: `--session NAME` → `$SDGEN_SESSION` → the agent's own session variable
+(`DSH_SESSION_ID`, `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, `GEMINI_SESSION_ID`, `AGENT_SESSION_ID`,
+`TERM_SESSION_ID`) → a key derived from the working directory. A pre-session
+`sdgen-output/.sdgen-history.json` is migrated into the first session that loads it and renamed
+`*.legacy.json`.
 
 Newest 500 entries per session, rewritten atomically:
 
@@ -324,11 +331,11 @@ sd-cli.exe -M vid_gen ^
 
 ## The two `start.bat` files: what to keep, what to ignore
 
-`<qwen_dir>\start.bat` — a long-running launcher. Model/quality flags are mirrored above; only
+`<qwen_dir>/start.bat` — a long-running launcher. Model/quality flags are mirrored above; only
 its listener flags are meaningless for the one-shot CLI. Its `--steps 25` is a quality choice for a
 non-Turbo checkpoint, not an accelerated-model default.
 
-`<wan_dir>\start.bat` — a double-click video generator that is **broken for automation**:
+`<wan_dir>/start.bat` — a double-click video generator that is **broken for automation**:
 
 1. `-n "%OUTPUT_NAME%"` is sd.cpp's **negative prompt**, not the filename, and it never passes `-o`, so
    the clip lands in `<work_dir>` under the CLI default name — while the chosen
@@ -347,6 +354,7 @@ The full key/env table lives in [Configuration](#configuration). The ones withou
 
 | Variable | Default |
 |---|---|
-| `SDGEN_SESSION` | `$DSH_SESSION_ID` (per-conversation history bucket) |
+| `SDGEN_SESSION` | the agent's session env var, else a cwd-derived key |
 | `SDGEN_CONFIG` | unset — explicit config file path |
+| `SDGEN_SESSION` | unset — pins the history bucket (overrides agent env) |
 | `SDGEN_FFMPEG` | unset — ffmpeg comes from PATH, then `scripts/vendor` |
